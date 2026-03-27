@@ -21,6 +21,10 @@ app.get("/", (req, res) => {
   res.status(200).send("Bot aktif 🔥");
 });
 
+app.use((req, res) => {
+  res.status(200).send("Bot aktif 🔥");
+});
+
 app.listen(process.env.PORT || 3000, () => {
   console.log(`Web server çalışıyor. Port: ${process.env.PORT || 3000}`);
 });
