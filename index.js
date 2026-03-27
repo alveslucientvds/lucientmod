@@ -21,6 +21,10 @@ app.get("/", (req, res) => {
   res.status(200).send("Bot aktif 🔥");
 });
 
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
 app.use((req, res) => {
   res.status(200).send("Bot aktif 🔥");
 });
@@ -155,10 +159,14 @@ function truncate(text, max = 1000) {
   return text.length > max ? text.slice(0, max) + "..." : text;
 }
 
+function isSnowflake(value) {
+  return /^\d{17,20}$/.test(value);
+}
+
 /* =========================
    READY
 ========================= */
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log(`${client.user.tag} olarak giriş yapıldı.`);
   client.user.setPresence({
     activities: [{ name: "Sunucuyu koruyor 🔥" }],
@@ -167,13 +175,19 @@ client.once("ready", () => {
 });
 
 /* =========================
+   KEEP ALIVE LOG
+========================= */
+setInterval(() => {
+  console.log("Bot ayakta 🔥");
+}, 300000);
+
+/* =========================
    COMMANDS
 ========================= */
 client.on("messageCreate", async (message) => {
   try {
     if (!message.guild || message.author.bot) return;
 
-    // Mesaj cache
     deletedMessageCache.set(message.id, {
       authorTag: message.author.tag,
       authorId: message.author.id,
@@ -190,14 +204,13 @@ client.on("messageCreate", async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const command = args.shift()?.toLowerCase();
 
-    /* ========== KICK ========== */
     if (command === "kick") {
       if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
         return message.reply("Kick yetkin yok.");
       }
 
       const member = getTargetMember(message, args[0]);
-      if (!member) return message.reply("Bir kullanıcı etiketle veya ID gir.");
+      if (!member) return message.reply("Bir kullanıcı etiketle veya geçerli bir ID gir.");
 
       if (member.id === message.author.id) {
         return message.reply("Kendini kickleyemezsin.");
@@ -218,31 +231,36 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    /* ========== BAN ========== */
     if (command === "ban") {
       if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
         return message.reply("Ban yetkin yok.");
       }
 
       const rawArg = args[0];
-      if (!rawArg) return message.reply("Bir kullanıcı etiketle veya ID gir.");
+      if (!rawArg) {
+        return message.reply("Bir kullanıcı etiketle veya geçerli bir ID gir.");
+      }
 
       let member = getTargetMember(message, rawArg);
 
-      if (!member) {
+      if (!member && isSnowflake(rawArg)) {
         try {
           member = await message.guild.members.fetch(rawArg);
-        } catch (_) {
+        } catch {
           member = null;
         }
       }
 
-      const targetId = member?.id || rawArg;
-      const reason = args.slice(1).join(" ") || "Sebep belirtilmedi.";
+      const targetId = member?.id || (isSnowflake(rawArg) ? rawArg : null);
+      if (!targetId) {
+        return message.reply("Kullanıcıyı etiketle ya da sadece sayısal kullanıcı ID'si gir.");
+      }
 
       if (targetId === message.author.id) {
         return message.reply("Kendini banlayamazsın.");
       }
+
+      const reason = args.slice(1).join(" ") || "Sebep belirtilmedi.";
 
       try {
         await message.guild.members.ban(targetId, { reason });
@@ -253,7 +271,6 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    /* ========== TIMEOUT ========== */
     if (command === "timeout") {
       if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
         return message.reply("Zaman aşımı yetkin yok.");
@@ -284,7 +301,6 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    /* ========== JOIN ========== */
     if (command === "join") {
       const voiceChannel = message.member.voice.channel;
       if (!voiceChannel) {
@@ -310,7 +326,6 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    /* ========== LEAVE ========== */
     if (command === "leave") {
       try {
         const connection = getVoiceConnection(message.guild.id);
@@ -400,12 +415,9 @@ client.on("guildBanAdd", async (ban) => {
 
 /* =========================
    MEMBER UPDATE
-   - Timeout log
-   - Role log
 ========================= */
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
   try {
-    /* ===== TIMEOUT LOG ===== */
     const oldTimeout = oldMember.communicationDisabledUntilTimestamp || null;
     const newTimeout = newMember.communicationDisabledUntilTimestamp || null;
 
@@ -434,7 +446,6 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
       }
     }
 
-    /* ===== ROLE LOG ===== */
     const oldRoles = oldMember.roles.cache;
     const newRoles = newMember.roles.cache;
 
@@ -594,7 +605,6 @@ client.on("channelUpdate", async (oldChannel, newChannel) => {
 
 /* =========================
    VOICE LOG
-   sağ tık -> bağlantısını kes
 ========================= */
 client.on("voiceStateUpdate", async (oldState, newState) => {
   try {
@@ -630,7 +640,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 /* =========================
    ANTI CRASH
 ========================= */
-process.on("unhandledRejection", (reason, promise) => {
+process.on("unhandledRejection", (reason) => {
   console.error("Unhandled Rejection:", reason);
 });
 
@@ -640,10 +650,6 @@ process.on("uncaughtException", (err) => {
 
 process.on("uncaughtExceptionMonitor", (err, origin) => {
   console.error("Uncaught Exception Monitor:", err, origin);
-});
-
-process.on("multipleResolves", (type, promise, value) => {
-  console.error("Multiple Resolves:", type, value);
 });
 
 client.on("error", (err) => {
@@ -658,17 +664,13 @@ client.on("shardError", (error) => {
   console.error("Shard Error:", error);
 });
 
-client.on("disconnect", () => {
-  console.warn("Bot bağlantısı koptu.");
-});
-
-client.on("reconnecting", () => {
-  console.log("Bot yeniden bağlanıyor...");
-});
-
 /* =========================
    LOGIN
 ========================= */
-client.login(TOKEN).catch((err) => {
-  console.error("Login hatası:", err);
-});
+client.login(TOKEN)
+  .then(() => {
+    console.log("Login başarılı");
+  })
+  .catch((err) => {
+    console.error("Login hatası:", err);
+  });
