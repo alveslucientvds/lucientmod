@@ -45,7 +45,12 @@ const client = new Client({
     GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.GuildModeration
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.GuildMember, Partials.User]
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.GuildMember,
+    Partials.User
+  ]
 });
 
 const PREFIX = process.env.PREFIX || ".";
@@ -65,11 +70,11 @@ const deletedMessageCache = new Map();
    HELPER FUNCTIONS
 ========================= */
 function getLogChannel(guild, name) {
-  return guild.channels.cache.find(
-    (c) =>
-      c.name === name &&
-      (c.type === ChannelType.GuildText || c.isTextBased?.())
-  );
+  return guild.channels.cache.find((c) => {
+    if (!c) return false;
+    if (c.name !== name) return false;
+    return c.type === ChannelType.GuildText || c.isTextBased?.();
+  });
 }
 
 function createLogEmbed({
@@ -145,13 +150,21 @@ function formatTimeout(ms) {
   return parts.join(", ");
 }
 
-function getTargetMember(message, arg) {
+async function getTargetMember(message, arg) {
   if (!arg) return null;
 
   const mentioned = message.mentions.members.first();
   if (mentioned) return mentioned;
 
-  return message.guild.members.cache.get(arg) || null;
+  const fromCache = message.guild.members.cache.get(arg);
+  if (fromCache) return fromCache;
+
+  try {
+    const fetched = await message.guild.members.fetch(arg);
+    return fetched || null;
+  } catch {
+    return null;
+  }
 }
 
 function truncate(text, max = 1000) {
@@ -161,6 +174,12 @@ function truncate(text, max = 1000) {
 
 function isSnowflake(value) {
   return /^\d{17,20}$/.test(value);
+}
+
+function isRecentAuditEntry(entry, maxAgeMs = 15000) {
+  if (!entry) return false;
+  const created = entry.createdTimestamp || 0;
+  return Date.now() - created <= maxAgeMs;
 }
 
 /* =========================
@@ -182,6 +201,23 @@ setInterval(() => {
 }, 300000);
 
 /* =========================
+   CACHE CLEANER
+========================= */
+setInterval(() => {
+  try {
+    const now = Date.now();
+
+    for (const [messageId, data] of deletedMessageCache.entries()) {
+      if (!data?.createdAt || now - data.createdAt > 5 * 60 * 1000) {
+        deletedMessageCache.delete(messageId);
+      }
+    }
+  } catch (err) {
+    console.error("Cache temizleme hatası:", err);
+  }
+}, 60000);
+
+/* =========================
    COMMANDS
 ========================= */
 client.on("messageCreate", async (message) => {
@@ -192,12 +228,9 @@ client.on("messageCreate", async (message) => {
       authorTag: message.author.tag,
       authorId: message.author.id,
       content: message.content || "Mesaj içeriği yok / embed / dosya olabilir.",
-      channelId: message.channel.id
+      channelId: message.channel.id,
+      createdAt: Date.now()
     });
-
-    setTimeout(() => {
-      deletedMessageCache.delete(message.id);
-    }, 5 * 60 * 1000);
 
     if (!message.content.startsWith(PREFIX)) return;
 
@@ -241,7 +274,7 @@ client.on("messageCreate", async (message) => {
         return message.reply("Zaman aşımı yetkin yok.");
       }
 
-      const member = getTargetMember(message, args[0]);
+      const member = await getTargetMember(message, args[0]);
       if (!member) return message.reply("Bir kullanıcı etiketle veya ID gir.");
 
       if (member.id === message.author.id) {
@@ -403,8 +436,9 @@ client.on("guildBanAdd", async (ban) => {
     if (!logChannel) return;
 
     const audit = await fetchAuditLog(ban.guild, AuditLogEvent.MemberBanAdd);
-    const executor = audit?.executor || null;
-    const reason = audit?.reason || "Sebep belirtilmedi.";
+    const validAudit = isRecentAuditEntry(audit) ? audit : null;
+    const executor = validAudit?.executor || null;
+    const reason = validAudit?.reason || "Sebep belirtilmedi.";
 
     const embed = createLogEmbed({
       title: "Kullanıcı Banlandı",
@@ -434,7 +468,8 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
       const logChannel = getLogChannel(newMember.guild, "timeout-log");
       if (logChannel) {
         const audit = await fetchAuditLog(newMember.guild, AuditLogEvent.MemberUpdate);
-        const executor = audit?.executor || null;
+        const validAudit = isRecentAuditEntry(audit) ? audit : null;
+        const executor = validAudit?.executor || null;
 
         let durationText = "Kaldırıldı";
         if (newTimeout && newTimeout > Date.now()) {
@@ -466,7 +501,8 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
       if (!logChannel) return;
 
       const audit = await fetchAuditLog(newMember.guild, AuditLogEvent.MemberRoleUpdate);
-      const executor = audit?.executor || null;
+      const validAudit = isRecentAuditEntry(audit) ? audit : null;
+      const executor = validAudit?.executor || null;
 
       for (const role of addedRoles.values()) {
         if (role.name === "@everyone") continue;
@@ -516,7 +552,8 @@ client.on("channelCreate", async (channel) => {
     if (!logChannel) return;
 
     const audit = await fetchAuditLog(channel.guild, AuditLogEvent.ChannelCreate);
-    const executor = audit?.executor || null;
+    const validAudit = isRecentAuditEntry(audit) ? audit : null;
+    const executor = validAudit?.executor || null;
 
     const embed = createLogEmbed({
       title: "Kanal Oluşturuldu",
@@ -543,7 +580,8 @@ client.on("channelDelete", async (channel) => {
     if (!logChannel) return;
 
     const audit = await fetchAuditLog(channel.guild, AuditLogEvent.ChannelDelete);
-    const executor = audit?.executor || null;
+    const validAudit = isRecentAuditEntry(audit) ? audit : null;
+    const executor = validAudit?.executor || null;
 
     const embed = createLogEmbed({
       title: "Kanal Silindi",
@@ -594,7 +632,8 @@ client.on("channelUpdate", async (oldChannel, newChannel) => {
     if (!changes.length) return;
 
     const audit = await fetchAuditLog(newChannel.guild, AuditLogEvent.ChannelUpdate);
-    const executor = audit?.executor || null;
+    const validAudit = isRecentAuditEntry(audit) ? audit : null;
+    const executor = validAudit?.executor || null;
 
     const embed = createLogEmbed({
       title: "Kanal Güncellendi",
@@ -617,30 +656,31 @@ client.on("channelUpdate", async (oldChannel, newChannel) => {
 ========================= */
 client.on("voiceStateUpdate", async (oldState, newState) => {
   try {
-    if (oldState.channelId && !newState.channelId) {
-      const guild = oldState.guild;
-      const logChannel = getLogChannel(guild, "voice-log");
-      if (!logChannel) return;
+    if (!oldState.channelId || newState.channelId) return;
 
-      const audit = await fetchAuditLog(guild, AuditLogEvent.MemberDisconnect);
-      const executor = audit?.executor || null;
-      const target = audit?.target || null;
+    const guild = oldState.guild;
+    const logChannel = getLogChannel(guild, "voice-log");
+    if (!logChannel) return;
 
-      if (target && target.id !== oldState.id) return;
-      if (!executor) return;
+    const audit = await fetchAuditLog(guild, AuditLogEvent.MemberDisconnect);
+    const validAudit = isRecentAuditEntry(audit) ? audit : null;
+    const executor = validAudit?.executor || null;
+    const target = validAudit?.target || null;
 
-      const embed = createLogEmbed({
-        title: "Ses Bağlantısı Kesildi",
-        description:
-          `**Bağlantısı kesilen kişi:** ${oldState.member?.user?.tag || "Bilinmiyor"} (${oldState.id})\n` +
-          `**Bağlantıyı kesen kişi:** ${executor.tag} (${executor.id})\n` +
-          `**Eski kanal:** ${oldState.channel?.name || "Bilinmiyor"}`,
-        color: 0xff0000,
-        executor
-      });
+    if (target && target.id !== oldState.id) return;
+    if (!executor) return;
 
-      await logChannel.send({ embeds: [embed] }).catch(() => {});
-    }
+    const embed = createLogEmbed({
+      title: "Ses Bağlantısı Kesildi",
+      description:
+        `**Bağlantısı kesilen kişi:** ${oldState.member?.user?.tag || "Bilinmiyor"} (${oldState.id})\n` +
+        `**Bağlantıyı kesen kişi:** ${executor.tag} (${executor.id})\n` +
+        `**Eski kanal:** ${oldState.channel?.name || "Bilinmiyor"}`,
+      color: 0xff0000,
+      executor
+    });
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
   } catch (err) {
     console.error("voiceStateUpdate hatası:", err);
   }
