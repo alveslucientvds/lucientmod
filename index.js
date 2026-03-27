@@ -139,7 +139,7 @@ function formatTimeout(ms) {
   const parts = [];
   if (days) parts.push(`${days} gün`);
   if (hours) parts.push(`${hours} saat`);
-  if (minutes) parts.push(`${hours ? ", " : ""}${minutes} dakika`);
+  if (minutes) parts.push(`${minutes} dakika`);
   if (seconds && parts.length === 0) parts.push(`${seconds} saniye`);
 
   return parts.join(", ");
