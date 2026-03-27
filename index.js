@@ -139,7 +139,7 @@ function formatTimeout(ms) {
   const parts = [];
   if (days) parts.push(`${days} gün`);
   if (hours) parts.push(`${hours} saat`);
-  if (minutes) parts.push(`${minutes} dakika`);
+  if (minutes) parts.push(`${hours ? ", " : ""}${minutes} dakika`);
   if (seconds && parts.length === 0) parts.push(`${seconds} saniye`);
 
   return parts.join(", ");
@@ -204,70 +204,35 @@ client.on("messageCreate", async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const command = args.shift()?.toLowerCase();
 
-    if (command === "kick") {
-      if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) {
-        return message.reply("Kick yetkin yok.");
-      }
-
-      const member = getTargetMember(message, args[0]);
-      if (!member) return message.reply("Bir kullanıcı etiketle veya geçerli bir ID gir.");
-
-      if (member.id === message.author.id) {
-        return message.reply("Kendini kickleyemezsin.");
-      }
-
-      if (!member.kickable) {
-        return message.reply("Bu kullanıcıyı kickleyemiyorum.");
-      }
-
-      const reason = args.slice(1).join(" ") || "Sebep belirtilmedi.";
-
-      try {
-        await member.kick(reason);
-        return message.reply(`✅ ${member.user.tag} sunucudan atıldı.`);
-      } catch (err) {
-        console.error("Kick hatası:", err);
-        return message.reply("Kick işlemi sırasında hata oluştu.");
-      }
-    }
-
-    if (command === "ban") {
+    if (command === "unban") {
       if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) {
-        return message.reply("Ban yetkin yok.");
+        return message.reply("Ban kaldırma yetkin yok.");
       }
 
       const rawArg = args[0];
       if (!rawArg) {
-        return message.reply("Bir kullanıcı etiketle veya geçerli bir ID gir.");
+        return message.reply("Bir kullanıcı ID'si girmen lazım. Örnek: `.unban 123456789012345678`");
       }
 
-      let member = getTargetMember(message, rawArg);
-
-      if (!member && isSnowflake(rawArg)) {
-        try {
-          member = await message.guild.members.fetch(rawArg);
-        } catch {
-          member = null;
-        }
-      }
-
-      const targetId = member?.id || (isSnowflake(rawArg) ? rawArg : null);
-      if (!targetId) {
-        return message.reply("Kullanıcıyı etiketle ya da sadece sayısal kullanıcı ID'si gir.");
-      }
-
-      if (targetId === message.author.id) {
-        return message.reply("Kendini banlayamazsın.");
+      if (!isSnowflake(rawArg)) {
+        return message.reply("Geçerli bir kullanıcı ID'si gir.");
       }
 
       const reason = args.slice(1).join(" ") || "Sebep belirtilmedi.";
 
       try {
-        await message.guild.members.ban(targetId, { reason });
-        return message.reply("✅ Kullanıcı banlandı.");
+        const bans = await message.guild.bans.fetch();
+        const bannedUser = bans.get(rawArg);
+
+        if (!bannedUser) {
+          return message.reply("Bu ID'ye ait banlı bir kullanıcı bulunamadı.");
+        }
+
+        await message.guild.members.unban(rawArg, reason);
+        return message.reply(`✅ ${bannedUser.user.tag} kullanıcısının banı kaldırıldı.`);
       } catch (err) {
-        console.error("Ban hatası:", err);
-        return message.reply("Ban işlemi sırasında hata oluştu.");
+        console.error("Unban hatası:", err);
+        return message.reply("Unban işlemi sırasında hata oluştu.");
       }
     }
 
@@ -298,6 +263,50 @@ client.on("messageCreate", async (message) => {
       } catch (err) {
         console.error("Timeout hatası:", err);
         return message.reply("Timeout işlemi sırasında hata oluştu.");
+      }
+    }
+
+    if (command === "sil") {
+      if (!message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+        return message.reply("Mesaj silme yetkin yok.");
+      }
+
+      const amount = parseInt(args[0], 10);
+
+      if (!amount || isNaN(amount)) {
+        return message.reply("Kaç mesaj silineceğini sayı olarak yaz. Örnek: `.sil 50`");
+      }
+
+      if (amount < 1) {
+        return message.reply("En az 1 mesaj silmelisin.");
+      }
+
+      if (amount > 200) {
+        return message.reply("Maksimum 200 mesaj silebilirsin.");
+      }
+
+      try {
+        let remaining = amount;
+        let totalDeleted = 0;
+
+        while (remaining > 0) {
+          const fetchLimit = Math.min(remaining, 100);
+          const deleted = await message.channel.bulkDelete(fetchLimit, true);
+          const size = deleted.size;
+
+          totalDeleted += size;
+          remaining -= size;
+
+          if (size < fetchLimit) break;
+        }
+
+        const replyMsg = await message.reply(`✅ Toplam ${totalDeleted} mesaj silindi.`);
+        setTimeout(() => {
+          replyMsg.delete().catch(() => {});
+        }, 3000);
+      } catch (err) {
+        console.error("Sil komutu hatası:", err);
+        return message.reply("Mesajlar silinirken hata oluştu. 14 günden eski mesajlar toplu silinemez.");
       }
     }
 
